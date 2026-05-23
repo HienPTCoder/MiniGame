@@ -1,0 +1,6 @@
+{
+  "name": "Zen Tile",
+  "description": "Một trò chơi xếp gạch (sliding puzzle) tinh tế, thư giãn với các chế độ Số Cổ Điển, Emoji dễ thương và dải màu Gradient độc đáo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
