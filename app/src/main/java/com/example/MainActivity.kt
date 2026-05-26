@@ -18,11 +18,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.itemsIndexed as lazyListItemsIndexed
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -32,1513 +31,1172 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.data.GameScore
-import com.example.ui.theme.MyApplicationTheme
+import kotlinx.coroutines.delay
+import com.example.data.LevelScore
 import com.example.ui.theme.*
-import com.example.viewmodel.GameViewModel
-import com.example.viewmodel.ScreenState
+import com.example.viewmodel.*
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
-// Modern list of modern curated animal emojis for our Cute Theme
-private val EMOJI_LIST = listOf(
-    "🐼", "🐱", "🐶", "🦊", "🦁", "🐨", "🐯", "🐸",
-    "🐙", "🐵", "🐧", "🐣", "🦄", "🦉", "🐳", "🐊",
-    "🥑", "🍓", "🍉", "🍒", "🍩", "🍕", "🎈", "🚀"
-)
-
-// Particle metadata helper for victory confetti simulation
-private data class ConfettiParticle(
-    var x: Float,
-    var y: Float,
-    var speedX: Float,
-    var speedY: Float,
-    var size: Float,
-    var rotation: Float,
-    var rotationSpeed: Float,
+// ── Confetti particle ─────────────────────────────────────────────────────
+private data class NovaSpark(
+    var x: Float, var y: Float,
+    var vx: Float, var vy: Float,
+    var size: Float, var rot: Float, var rotV: Float,
     val color: Color
 )
 
+// ── Gem visual data ────────────────────────────────────────────────────────
+private val GEM_BRUSHES: List<Brush> = listOf(
+    Brush.verticalGradient(listOf(Color(0xFFFF6B7A), Color(0xFF8B0000))),  // 1 Ruby
+    Brush.verticalGradient(listOf(Color(0xFF40D9FF), Color(0xFF003A8C))),  // 2 Sapphire
+    Brush.verticalGradient(listOf(Color(0xFF5AFFA0), Color(0xFF006400))),  // 3 Emerald
+    Brush.verticalGradient(listOf(Color(0xFFFFE566), Color(0xFF7A5000))),  // 4 Amber
+    Brush.verticalGradient(listOf(Color(0xFFE96FFF), Color(0xFF4A0080))),  // 5 Amethyst
+    Brush.verticalGradient(listOf(Color(0xFFFF8EC6), Color(0xFF880040))),  // 6 Rose
+)
+
+private val GEM_GLOW_COLORS = listOf(
+    Color(0xFFFF4757), // Ruby
+    Color(0xFF00C6FF), // Sapphire
+    Color(0xFF38EF7D), // Emerald
+    Color(0xFFFFD200), // Amber
+    Color(0xFFDA22FF), // Amethyst
+    Color(0xFFFF6CAB), // Rose
+)
+
+private val GEM_ICONS   = listOf("♦", "✦", "▲", "★", "⬡", "♥")
+private val POWER_ICONS = mapOf(1 to "⚡", 2 to "💥", 3 to "✺")
+
+// ── Particle confetti colors ───────────────────────────────────────────────
+private val SPARK_COLORS = listOf(
+    Color(0xFFFF4757), Color(0xFFFFD200), Color(0xFF38EF7D),
+    Color(0xFF00C6FF), Color(0xFFDA22FF), Color(0xFFFF6CAB),
+    Color(0xFFFFFFFF), Color(0xFF00F5FF)
+)
+
+// ─────────────────────────────────────────────────────────────────────────
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    contentWindowInsets = WindowInsets.safeDrawing
-                ) { innerPadding ->
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.verticalGradient(
-                                    colors = listOf(Slate900, Color(0xFF1E1B4B)) // Premium deep indigo slate background
-                                )
-                            )
-                            .padding(innerPadding)
-                    ) {
-                        GameNavigation()
-                    }
+            com.example.ui.theme.MyApplicationTheme {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(listOf(SpaceDeep, SpaceMid, Color(0xFF0A1020)))
+                        )
+                ) {
+                    GameNavigation()
                 }
             }
         }
     }
 }
 
+// ── Navigation ────────────────────────────────────────────────────────────
 @Composable
-fun GameNavigation(gameViewModel: GameViewModel = viewModel()) {
-    val screenState by gameViewModel.screenState.collectAsStateWithLifecycle()
-    
-    // Refresh check to ensure active saved game state status is accurate on enter
-    LaunchedEffect(screenState) {
-        gameViewModel.checkSavedGamePresence()
-    }
-
+fun GameNavigation(vm: GameViewModel = viewModel()) {
+    val phase by vm.gamePhase.collectAsStateWithLifecycle()
     AnimatedContent(
-        targetState = screenState,
+        targetState = phase,
         transitionSpec = {
-            fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
+            fadeIn(tween(280)) togetherWith fadeOut(tween(220))
         },
-        label = "screen_navigation"
-    ) { state ->
-        when (state) {
-            ScreenState.Menu -> MainMenuScreen(gameViewModel)
-            ScreenState.Playing -> GamePlayScreen(gameViewModel)
-            ScreenState.Scores -> LeaderboardScreen(gameViewModel)
+        label = "nav"
+    ) { p ->
+        when (p) {
+            GamePhase.MENU, GamePhase.LEADERBOARD -> MenuScreen(vm)
+            GamePhase.PLAYING,
+            GamePhase.PROCESSING,
+            GamePhase.LEVEL_COMPLETE,
+            GamePhase.GAME_OVER     -> GameScreen(vm)
         }
     }
 }
 
-// ----------------------------------------------------
-// SCREEN 1: MAIN MENU
-// ----------------------------------------------------
+// ═════════════════════════════════════════════════════════════════════════
+// SCREEN 1 — MAIN MENU
+// ═════════════════════════════════════════════════════════════════════════
 @Composable
-fun MainMenuScreen(viewModel: GameViewModel) {
-    val selectedSize by viewModel.gridSize.collectAsStateWithLifecycle()
-    val selectedTheme by viewModel.themeName.collectAsStateWithLifecycle()
-    val hasSavedGame by viewModel.hasActiveSavedGame.collectAsStateWithLifecycle()
-    val haptic = LocalHapticFeedback.current
-    val view = LocalView.current
+fun MenuScreen(vm: GameViewModel) {
+    val phase          by vm.gamePhase.collectAsStateWithLifecycle()
+    val levelBestStars by vm.levelBestStars.collectAsStateWithLifecycle()
+    val topScores      by vm.topScores.collectAsStateWithLifecycle()
+    val haptic         = LocalHapticFeedback.current
+    val view           = LocalView.current
+
+    val showLeaderboard = phase == GamePhase.LEADERBOARD
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp)
-            .verticalScroll(androidx.compose.foundation.rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+            .padding(horizontal = 18.dp)
+            .verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
 
-        // Large Graphic Title Visual Card representing Zen Tiles
-        Box(
+        // ── Logo ─────────────────────────────────────────────────────────
+        NovaBlastLogo()
+
+        Spacer(Modifier.height(20.dp))
+
+        // ── Tab toggle ────────────────────────────────────────────────────
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(140.dp)
-                .clip(RoundedCornerShape(32.dp))
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(Color(0xFF312E81), Slate800),
-                        radius = 280f
-                    )
-                )
-                .border(1.5.dp, Indigo500.copy(alpha = 0.4f), RoundedCornerShape(32.dp)),
-            contentAlignment = Alignment.Center
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xFF0A1628))
+                .border(1.dp, SpaceBorder, RoundedCornerShape(14.dp))
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // Interactive Mini-Grid Graphic Representation Logo
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(modifier = Modifier.size(24.dp).clip(RoundedCornerShape(6.dp)).background(Indigo500))
-                    Box(modifier = Modifier.size(24.dp).clip(RoundedCornerShape(6.dp)).background(Teal400))
-                    Box(modifier = Modifier.size(24.dp).clip(RoundedCornerShape(6.dp)).background(Amber400))
+            listOf(false, true).forEach { isLb ->
+                val sel = showLeaderboard == isLb
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(if (sel) Color(0xFF1A3A7E) else Color.Transparent)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            vm.setPhase(if (isLb) GamePhase.LEADERBOARD else GamePhase.MENU)
+                        }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (isLb) "🏆  Bảng Xếp Hạng" else "🎮  Chọn Level",
+                        fontSize = 13.sp,
+                        fontWeight = if (sel) FontWeight.ExtraBold else FontWeight.Medium,
+                        color = if (sel) NeonCyan else Color(0xFF6B8EC0)
+                    )
                 }
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = "ZEN TILE",
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Black,
-                    letterSpacing = 4.sp,
-                    color = Color.White
-                )
-                Text(
-                    text = "Trải nghiệm xếp gạch thư giãn & trí tuệ",
-                    fontSize = 12.sp,
-                    color = Slate300,
-                    fontWeight = FontWeight.Medium
-                )
             }
         }
 
-        // Selection Section 1: Board Dimensions
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Slate800),
-            shape = RoundedCornerShape(24.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "KÍCH THƯỚC BÀN CHƠI",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Teal400,
-                    letterSpacing = 1.sp
-                )
-                
+        Spacer(Modifier.height(16.dp))
+
+        if (!showLeaderboard) {
+            // ── Level Grid ────────────────────────────────────────────────
+            Text(
+                text = "CHỌN LEVEL",
+                fontSize = 11.sp,
+                letterSpacing = 2.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF4A7EC0),
+                modifier = Modifier.align(Alignment.Start)
+            )
+            Spacer(Modifier.height(10.dp))
+
+            val levelChunks = LEVEL_CONFIGS.chunked(2)
+            levelChunks.forEach { pair ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    val options = listOf(
-                        Triple(3, "3x3", "Dễ"),
-                        Triple(4, "4x4", "Vừa"),
-                        Triple(5, "5x5", "Khó")
-                    )
-                    options.forEach { (size, label, desc) ->
-                        val isSelected = selectedSize == size
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (isSelected) Indigo500 else Slate900)
-                                .border(
-                                    width = if (isSelected) 2.dp else 1.dp,
-                                    color = if (isSelected) Teal400 else Slate700,
-                                    shape = RoundedCornerShape(16.dp)
-                                )
-                                .clickable {
-                                    if (viewModel.hapticEnabled.value) {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    }
-                                    viewModel.selectGridSize(size)
-                                }
-                                .padding(vertical = 12.dp)
-                                .testTag("size_$label"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(
-                                    text = label,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) Color.White else Slate200
-                                )
-                                Text(
-                                    text = desc,
-                                    fontSize = 11.sp,
-                                    color = if (isSelected) Slate100 else Slate500
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Selection Section 2: Themes Selectors
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Slate800),
-            shape = RoundedCornerShape(24.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "CHỦ ĐỀ GIAO DIỆN",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Teal400,
-                    letterSpacing = 1.sp
-                )
-
-                val themes = listOf(
-                    Triple("Classic", "Số Cổ Điển", "🔢 1, 2, 3..."),
-                    Triple("Emoji", "Bóng Thú Emoji", "🐱 🐶 🦊..."),
-                    Triple("Gradient", "Sắc Màu Gradient", "🎨 Cực Thư Giãn")
-                )
-
-                themes.forEach { (thKey, title, subtitle) ->
-                    val isSelected = selectedTheme == thKey
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(if (isSelected) Slate700 else Slate900)
-                            .border(
-                                width = if (isSelected) 1.5.dp else 0.dp,
-                                color = if (isSelected) Teal400 else Color.Transparent,
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                            .clickable {
-                                if (viewModel.hapticEnabled.value) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                }
-                                viewModel.selectTheme(thKey)
-                            }
-                            .padding(horizontal = 16.dp, vertical = 14.dp)
-                            .testTag("theme_$thKey"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                text = title,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSelected) Color.White else Slate200
-                            )
-                            Text(
-                                text = subtitle,
-                                fontSize = 12.sp,
-                                color = if (isSelected) Slate100 else Slate500
-                            )
-                        }
-
-                        RadioButton(
-                            selected = isSelected,
+                    pair.forEach { cfg ->
+                        LevelButton(
+                            cfg = cfg,
+                            bestStars = levelBestStars[cfg.level] ?: 0,
+                            modifier = Modifier.weight(1f),
                             onClick = {
-                                if (viewModel.hapticEnabled.value) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                }
-                                viewModel.selectTheme(thKey)
-                            },
-                            colors = RadioButtonDefaults.colors(
-                                selectedColor = Teal400,
-                                unselectedColor = Slate500
-                            )
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                view.playSoundEffect(SoundEffectConstants.CLICK)
+                                vm.startLevel(cfg.level)
+                            }
                         )
                     }
-                    if (thKey != "Gradient") {
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
                 }
+                Spacer(Modifier.height(10.dp))
             }
-        }
+        } else {
+            // ── Leaderboard ───────────────────────────────────────────────
+            Text(
+                text = "TOP 20 KỶ LỤC",
+                fontSize = 11.sp,
+                letterSpacing = 2.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF4A7EC0),
+                modifier = Modifier.align(Alignment.Start)
+            )
+            Spacer(Modifier.height(10.dp))
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // CTA Section Buttons
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            // Continuation / Resume Game Button
-            if (hasSavedGame) {
-                Button(
-                    onClick = {
-                        if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (viewModel.soundEnabled.value) view.playSoundEffect(SoundEffectConstants.CLICK)
-                        viewModel.loadSavedGame()
-                    },
+            if (topScores.isEmpty()) {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(56.dp)
-                        .testTag("resume_button"),
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo500),
-                    shape = RoundedCornerShape(18.dp)
+                        .height(160.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = "Tiếp tục", tint = Color.White)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "TIẾP TỤC VÁN CHƠI DANG DỞ",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("🌌", fontSize = 40.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Chưa có kỷ lục nào", color = Color(0xFF3A5A8E), fontWeight = FontWeight.Bold)
+                        Text("Hãy bắt đầu chơi và lập kỷ lục!", fontSize = 12.sp, color = Color(0xFF2A4A6E))
+                    }
+                }
+            } else {
+                topScores.forEachIndexed { index, score ->
+                    LeaderboardRow(rank = index + 1, score = score)
+                    Spacer(Modifier.height(6.dp))
                 }
             }
 
-            // Primary Start Brand New Game Button
-            Button(
-                onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    if (viewModel.soundEnabled.value) view.playSoundEffect(SoundEffectConstants.CLICK)
-                    viewModel.startNewGame()
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(58.dp)
-                    .testTag("start_button"),
-                colors = ButtonDefaults.buttonColors(containerColor = Teal400),
-                shape = RoundedCornerShape(18.dp)
-            ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = "Bắt đầu", tint = Slate900)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "BẮT ĐẦU VÁN CHƠI MỚI",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Black,
-                    color = Slate900
-                )
+            Spacer(Modifier.height(8.dp))
+            if (topScores.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        vm.clearHistory()
+                    },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFF4757)),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF4757).copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Xóa Lịch Sử", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
             }
+        }
 
-            // Secondary Buttons Block
+        Spacer(Modifier.height(32.dp))
+    }
+}
+
+@Composable
+fun NovaBlastLogo() {
+    // Animated glow pulse
+    val infiniteTransition = rememberInfiniteTransition(label = "logo_glow")
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f, targetValue = 0.9f,
+        animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse),
+        label = "glow_alpha"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(150.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(
+                Brush.radialGradient(
+                    listOf(Color(0xFF0D2060), Color(0xFF060A18)),
+                    radius = 500f
+                )
+            )
+            .border(
+                1.5.dp,
+                Brush.horizontalGradient(listOf(NeonCyan.copy(alpha = glowAlpha), NeonBlue.copy(alpha = glowAlpha))),
+                RoundedCornerShape(28.dp)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Gem row visual
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                GEM_GLOW_COLORS.forEach { c ->
+                    Box(
+                        modifier = Modifier
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(c)
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = "NOVA",
+                fontSize = 38.sp,
+                fontWeight = FontWeight.Black,
+                color = NeonCyan,
+                letterSpacing = 6.sp
+            )
+            Text(
+                text = "BLAST",
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Black,
+                color = Color.White,
+                letterSpacing = 8.sp
+            )
+            Text(
+                text = "Match-3 Năng Lượng Vũ Trụ",
+                fontSize = 11.sp,
+                color = Color(0xFF4A7EC0),
+                letterSpacing = 0.5.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun LevelButton(cfg: LevelConfig, bestStars: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val isCompleted = bestStars > 0
+    val bgColor = when {
+        cfg.level == 10 -> Brush.linearGradient(listOf(Color(0xFF1A0040), Color(0xFF0A0020)))
+        isCompleted     -> Brush.linearGradient(listOf(Color(0xFF0A1E40), Color(0xFF060E25)))
+        else            -> Brush.linearGradient(listOf(Color(0xFF0A1628), Color(0xFF060A18)))
+    }
+    val borderColor = when {
+        cfg.level == 10 -> Color(0xFFDA22FF)
+        isCompleted     -> NeonCyan.copy(alpha = 0.5f)
+        else            -> SpaceBorder.copy(alpha = 0.6f)
+    }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp)
+    ) {
+        Column {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
-                // High Scores Leaderboard Secondary action
-                OutlinedButton(
-                    onClick = {
-                        if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (viewModel.soundEnabled.value) view.playSoundEffect(SoundEffectConstants.CLICK)
-                        viewModel.setScreenState(ScreenState.Scores)
-                    },
+                Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(52.dp)
-                        .testTag("leaderboard_tab"),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                    border = borderStroke()
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(if (cfg.level == 10) Color(0xFF2A0060) else Color(0xFF0D1F45)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(imageVector = Icons.Default.Star, contentDescription = "Bảng Điểm", tint = Amber400)
-                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "BẢNG ĐIỂM",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
+                        text = cfg.level.toString(),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (cfg.level == 10) Color(0xFFDA22FF) else NeonCyan
                     )
                 }
-
-                // In-Menu Sound/Haptic Quick Toggle Cards
-                var showSettingsDialog by remember { mutableStateOf(false) }
-                OutlinedButton(
-                    onClick = {
-                        if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        showSettingsDialog = true
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(52.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                    border = borderStroke()
-                ) {
-                    Icon(imageVector = Icons.Default.Settings, contentDescription = "Cài đặt", tint = Slate300)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "CÀI ĐẶT",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                if (showSettingsDialog) {
-                    SettingsDialog(viewModel = viewModel, onDismiss = { showSettingsDialog = false })
+                // Stars
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    repeat(3) { i ->
+                        Text(
+                            text = "★",
+                            fontSize = 11.sp,
+                            color = if (i < bestStars) Color(0xFFFFD200) else Color(0xFF1A2A4A)
+                        )
+                    }
                 }
             }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = cfg.name,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "${formatScore(cfg.targetScore)} pts • ${cfg.maxMoves} bước",
+                fontSize = 10.sp,
+                color = Color(0xFF4A7EC0)
+            )
         }
-        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
 @Composable
-fun borderStroke() = androidx.compose.foundation.BorderStroke(1.2.dp, Slate700)
+fun LeaderboardRow(rank: Int, score: LevelScore) {
+    val medal = when (rank) { 1 -> "🥇"; 2 -> "🥈"; 3 -> "🥉"; else -> "#$rank" }
+    val cfg = LEVEL_CONFIGS.getOrElse(score.level - 1) { LEVEL_CONFIGS.last() }
 
-// ----------------------------------------------------
-// SETTINGS DIALOG VIEW
-// ----------------------------------------------------
-@Composable
-fun SettingsDialog(viewModel: GameViewModel, onDismiss: () -> Unit) {
-    val soundEnabled by viewModel.soundEnabled.collectAsStateWithLifecycle()
-    val hapticEnabled by viewModel.hapticEnabled.collectAsStateWithLifecycle()
-    val showIndicesInGradient by viewModel.showIndicesInGradient.collectAsStateWithLifecycle()
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = Slate800),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp)
-            ) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF081428))
+            .border(1.dp, SpaceBorder.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(text = medal, fontSize = if (rank <= 3) 18.sp else 13.sp)
+            Column {
                 Text(
-                    text = "Cấu Hình Trò Chơi",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                    text = "Lv.${score.level} — ${cfg.name}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
                     color = Color.White
                 )
-
-                Divider(color = Slate700)
-
-                // Sound Effect Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text(text = "Âm Thanh Clinch", fontWeight = FontWeight.Bold, color = Color.White)
-                        Text(text = "Bật/Tắt hiệu ứng click", fontSize = 11.sp, color = Slate500)
-                    }
-                    Switch(
-                        checked = soundEnabled,
-                        onCheckedChange = { viewModel.toggleSound() },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Teal400)
-                    )
-                }
-
-                // Haptic Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text(text = "Rung Phản Hồi", fontWeight = FontWeight.Bold, color = Color.White)
-                        Text(text = "Rung khi di chuyển ô gạch", fontSize = 11.sp, color = Slate500)
-                    }
-                    Switch(
-                        checked = hapticEnabled,
-                        onCheckedChange = { viewModel.toggleHaptic() },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Teal400)
-                    )
-                }
-
-                // Gradient Hints Toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text(text = "Gợi Ý Thứ Tự Màu", fontWeight = FontWeight.Bold, color = Color.White)
-                        Text(text = "Hiển thị chỉ số mờ trên ô màu", fontSize = 11.sp, color = Slate500)
-                    }
-                    Switch(
-                        checked = showIndicesInGradient,
-                        onCheckedChange = { viewModel.toggleShowIndicesInGradient() },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Teal400)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                Button(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo500),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text(text = "Đóng", fontWeight = FontWeight.Bold)
+                Text(
+                    text = formatDate(score.timestamp) + " • ${score.moves} bước",
+                    fontSize = 10.sp,
+                    color = Color(0xFF3A5A8E)
+                )
+            }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = formatScore(score.score),
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Black,
+                color = NeonCyan
+            )
+            Row {
+                repeat(3) { i ->
+                    Text("★", fontSize = 10.sp, color = if (i < score.stars) Color(0xFFFFD200) else Color(0xFF1A2A4A))
                 }
             }
         }
     }
 }
 
-// ----------------------------------------------------
-// SCREEN 2: ACTIVE GAME PLAY OVERVIEW
-// ----------------------------------------------------
+// ═════════════════════════════════════════════════════════════════════════
+// SCREEN 2 — GAME PLAY
+// ═════════════════════════════════════════════════════════════════════════
 @Composable
-fun GamePlayScreen(viewModel: GameViewModel) {
-    val size by viewModel.gridSize.collectAsStateWithLifecycle()
-    val tiles by viewModel.tiles.collectAsStateWithLifecycle()
-    val moves by viewModel.moves.collectAsStateWithLifecycle()
-    val timeLimitSecs by viewModel.timeSecs.collectAsStateWithLifecycle()
-    val hasCompleted by viewModel.isCompleted.collectAsStateWithLifecycle()
-    val isPaused by viewModel.isPaused.collectAsStateWithLifecycle()
-    val themeName by viewModel.themeName.collectAsStateWithLifecycle()
-    val hintValue by viewModel.hintTileValue.collectAsStateWithLifecycle()
-    val showIndices by viewModel.showIndicesInGradient.collectAsStateWithLifecycle()
-    val haptic = LocalHapticFeedback.current
-    val view = LocalView.current
+fun GameScreen(vm: GameViewModel) {
+    val board           by vm.board.collectAsStateWithLifecycle()
+    val selectedIndex   by vm.selectedIndex.collectAsStateWithLifecycle()
+    val explodingIndices by vm.explodingIndices.collectAsStateWithLifecycle()
+    val shakeIndex      by vm.shakeIndex.collectAsStateWithLifecycle()
+    val score           by vm.score.collectAsStateWithLifecycle()
+    val movesLeft       by vm.movesLeft.collectAsStateWithLifecycle()
+    val currentLevel    by vm.currentLevel.collectAsStateWithLifecycle()
+    val combo           by vm.combo.collectAsStateWithLifecycle()
+    val stars           by vm.stars.collectAsStateWithLifecycle()
+    val phase           by vm.gamePhase.collectAsStateWithLifecycle()
+    val haptic          = LocalHapticFeedback.current
+    val view            = LocalView.current
 
-    // Confirmation Alert
-    var showScrambleAlert by remember { mutableStateOf(false) }
+    val cfg = vm.getLevelConfig(currentLevel)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // TOP TASKBAR
+        Spacer(Modifier.height(8.dp))
+
+        // ── Top Bar ───────────────────────────────────────────────────────
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Quay về / Back button
             IconButton(
                 onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    if (viewModel.soundEnabled.value) view.playSoundEffect(SoundEffectConstants.CLICK)
-                    viewModel.pauseGame()
-                    viewModel.setScreenState(ScreenState.Menu)
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    vm.setPhase(GamePhase.MENU)
                 },
-                modifier = Modifier.background(Slate800, CircleShape).testTag("back_button")
+                modifier = Modifier
+                    .size(42.dp)
+                    .background(Color(0xFF0A1628), CircleShape)
+                    .border(1.dp, SpaceBorder, CircleShape)
             ) {
-                Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Trở về", tint = Color.White)
+                Icon(Icons.Default.ArrowBack, contentDescription = "Về Menu", tint = Color.White, modifier = Modifier.size(18.dp))
             }
 
-            // Title mode
-            val vietThemeName = when (themeName) {
-                "Classic" -> "Cơ Bản 🔢"
-                "Emoji" -> "Thú Vui 🐱"
-                else -> "Gradient 🎨"
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "LEVEL ${cfg.level}",
+                    fontSize = 11.sp,
+                    letterSpacing = 2.sp,
+                    color = Color(0xFF4A7EC0),
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = cfg.name,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Black,
+                    color = Color.White
+                )
             }
-            Text(
-                text = "${size}x${size} • $vietThemeName",
-                fontWeight = FontWeight.Bold,
-                fontSize = 18.sp,
-                color = Color.White
-            )
 
-            // Dynamic Settings Gear inside game Play
-            var showQuickSettings by remember { mutableStateOf(false) }
             IconButton(
                 onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    showQuickSettings = true
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    vm.restartLevel()
                 },
-                modifier = Modifier.background(Slate800, CircleShape)
+                modifier = Modifier
+                    .size(42.dp)
+                    .background(Color(0xFF0A1628), CircleShape)
+                    .border(1.dp, SpaceBorder, CircleShape)
             ) {
-                Icon(imageVector = Icons.Default.Settings, contentDescription = "Cấu hình nhanh", tint = Slate300)
-            }
-
-            if (showQuickSettings) {
-                SettingsDialog(viewModel = viewModel, onDismiss = { showQuickSettings = false })
+                Icon(Icons.Default.Refresh, contentDescription = "Chơi lại", tint = Color(0xFF4A7EC0), modifier = Modifier.size(18.dp))
             }
         }
 
-        // STATS CARD SYSTEM
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            // Move Counter
-            Card(
-                modifier = Modifier.weight(1.2f),
-                colors = CardDefaults.cardColors(containerColor = Slate800),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier.size(34.dp).background(Indigo500.copy(alpha = 0.2f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(imageVector = Icons.Default.Refresh, contentDescription = "Số bước", tint = Indigo500, modifier = Modifier.size(18.dp))
-                    }
-                    Column {
-                        Text(text = "SỐ BƯỚC", fontSize = 10.sp, color = Slate500, fontWeight = FontWeight.Bold)
-                        Text(text = "$moves", fontSize = 18.sp, color = Color.White, fontWeight = FontWeight.Black)
-                    }
-                }
-            }
+        Spacer(Modifier.height(6.dp))
 
-            // Ticker Count
-            Card(
-                modifier = Modifier.weight(1.2f),
-                colors = CardDefaults.cardColors(containerColor = Slate800),
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // ── HUD: Score + Moves ────────────────────────────────────────────
+        GameHUD(score = score, targetScore = cfg.targetScore, movesLeft = movesLeft, maxMoves = cfg.maxMoves)
+
+        Spacer(Modifier.height(8.dp))
+
+        // ── Combo Indicator ───────────────────────────────────────────────
+        // Use AnimatedContent (no ColumnScope receiver conflict) instead of AnimatedVisibility
+        AnimatedContent(
+            targetState = combo,
+            transitionSpec = {
+                (scaleIn(spring(Spring.DampingRatioMediumBouncy)) + fadeIn())
+                    .togetherWith(scaleOut() + fadeOut(tween(400)))
+            },
+            label = "combo_anim"
+        ) { c ->
+            if (c > 1) {
+                ComboLabel(c)
+            } else {
+                Spacer(Modifier.height(36.dp))
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        // ── Gem Board ─────────────────────────────────────────────────────
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .shadow(12.dp, RoundedCornerShape(24.dp))
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xFF060E22))
+                .border(
+                    1.5.dp,
+                    Brush.linearGradient(listOf(NeonCyan.copy(0.4f), NeonBlue.copy(0.2f))),
+                    RoundedCornerShape(24.dp)
+                )
+                .padding(8.dp)
+        ) {
+            if (board.isNotEmpty()) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(GameViewModel.GRID_COLS),
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement   = Arrangement.spacedBy(4.dp),
+                    userScrollEnabled = false
                 ) {
-                    Box(
-                        modifier = Modifier.size(34.dp).background(Teal400.copy(alpha = 0.2f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(imageVector = Icons.Default.PlayArrow, contentDescription = "Thời gian", tint = Teal400, modifier = Modifier.size(18.dp))
-                    }
-                    Column {
-                        Text(text = "THỜI GIAN", fontSize = 10.sp, color = Slate500, fontWeight = FontWeight.Bold)
-                        Text(
-                            text = formatSeconds(timeLimitSecs),
-                            fontSize = 18.sp,
-                            color = Color.White,
-                            fontWeight = FontWeight.Black
+                    itemsIndexed(board) { index, gemValue ->
+                        GemCell(
+                            gemValue   = gemValue,
+                            isSelected = selectedIndex == index,
+                            isExploding = index in explodingIndices,
+                            isShaking  = shakeIndex == index,
+                            onClick    = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                view.playSoundEffect(SoundEffectConstants.CLICK)
+                                vm.onGemClick(index)
+                            }
                         )
                     }
                 }
             }
 
-            // Pause Play Toggle State Icon
-            IconButton(
-                onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    if (isPaused) viewModel.resumeGame() else viewModel.pauseGame()
-                },
-                modifier = Modifier
-                    .size(54.dp)
-                    .background(if (isPaused) Teal400 else Slate800, RoundedCornerShape(20.dp))
-            ) {
-                Icon(
-                    imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Phone, // Handled pause icon fallback manually or use custom
-                    contentDescription = "Tạm dừng",
-                    tint = if (isPaused) Slate900 else Color.White
-                )
-            }
-        }
-
-        // TACTILE PUZZLE BOARD CONTAINER
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(28.dp))
-                .shadow(12.dp, RoundedCornerShape(28.dp)),
-            contentAlignment = Alignment.Center
-        ) {
-            // Normal Grid View Board
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(size),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(Slate800)
-                    .border(2.dp, Slate700, RoundedCornerShape(28.dp))
-                    .padding(12.dp)
-                    .testTag("puzzle_grid"),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                userScrollEnabled = false
-            ) {
-                itemsIndexed(tiles) { index, tileValue ->
-                    TileCell(
-                        value = tileValue,
-                        gridSize = size,
-                        themeName = themeName,
-                        isHint = tileValue == hintValue,
-                        showIndexInGradient = showIndices,
-                        onClick = {
-                            viewModel.moveTileByIndex(index)
-                        }
-                    )
-                }
-            }
-
-            // Play Pause Glass frosted sheet screen
-            if (isPaused) {
+            // Processing overlay (subtle so gems still visible)
+            if (phase == GamePhase.PROCESSING) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Slate900.copy(alpha = 0.85f))
+                        .background(Color.Transparent)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
-                        ) {
-                            if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.resumeGame()
-                        }
-                ) {
-                    Column(
-                        modifier = Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // Pulsing Icon
-                        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-                        val scale by infiniteTransition.animateFloat(
-                            initialValue = 1f,
-                            targetValue = 1.2f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(900, easing = LinearOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ), label = "play_pulse"
-                        )
-                        
-                        Box(
-                            modifier = Modifier
-                                .size(64.dp)
-                                .shadow(8.dp, CircleShape)
-                                .background(Teal400, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = "Tiếp tục",
-                                tint = Slate900,
-                                modifier = Modifier.size(36.dp)
-                            )
-                        }
-
-                        Text(
-                            text = "Trò Chơi Tạm Dừng",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = Color.White
-                        )
-                        Text(
-                            text = "Chạm vào bàn chơi để tiếp tục",
-                            fontSize = 13.sp,
-                            color = Slate300
-                        )
-                    }
-                }
+                        ) { /* Block taps during processing */ }
+                )
             }
         }
 
-        // CONTROL BUTTONS TOOLBAR UNDER BOARD
+        Spacer(Modifier.height(12.dp))
+
+        // ── Bottom hint ───────────────────────────────────────────────────
+        Text(
+            text = when (phase) {
+                GamePhase.PROCESSING -> "⚡ Đang xử lý chain..."
+                else -> "Chạm vào 2 viên kề nhau để đổi chỗ"
+            },
+            fontSize = 11.sp,
+            color = Color(0xFF2A4A6E),
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(Modifier.height(16.dp))
+    }
+
+    // ── Overlay Dialogs ───────────────────────────────────────────────────
+    if (phase == GamePhase.LEVEL_COMPLETE) {
+        VictoryDialog(vm = vm, stars = stars, score = score, cfg = vm.getLevelConfig(currentLevel))
+    }
+    if (phase == GamePhase.GAME_OVER) {
+        GameOverDialog(vm = vm, score = score, cfg = vm.getLevelConfig(currentLevel))
+    }
+}
+
+@Composable
+fun GameHUD(score: Int, targetScore: Int, movesLeft: Int, maxMoves: Int) {
+    val animScore by animateIntAsState(targetValue = score, animationSpec = tween(400), label = "score")
+    val progress  = (score.toFloat() / targetScore).coerceIn(0f, 1f)
+    val animProg  by animateFloatAsState(targetValue = progress, animationSpec = tween(500), label = "prog")
+
+    val movesColor = when {
+        movesLeft <= 3  -> Color(0xFFFF4757)
+        movesLeft <= 7  -> Color(0xFFFFD200)
+        else            -> NeonCyan
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF080E20))
+            .border(1.dp, SpaceBorder.copy(0.5f), RoundedCornerShape(18.dp))
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+    ) {
+        // Score row
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp)
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom
         ) {
-            // Heuristic Hint button
-            Button(
-                onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    if (viewModel.soundEnabled.value) view.playSoundEffect(SoundEffectConstants.CLICK)
-                    viewModel.calculateHint()
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(54.dp)
-                    .testTag("hint_button"),
-                colors = ButtonDefaults.buttonColors(containerColor = Slate800),
-                shape = RoundedCornerShape(16.dp),
-                border = borderStroke()
-            ) {
-                Icon(imageVector = Icons.Default.Search, contentDescription = "Gợi ý", tint = Amber400)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Gợi Ý", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 15.sp)
+            Column {
+                Text("ĐIỂM SỐ", fontSize = 9.sp, letterSpacing = 1.5.sp, color = Color(0xFF3A5A8E), fontWeight = FontWeight.Bold)
+                Text(
+                    text = formatScore(animScore),
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Black,
+                    color = NeonCyan
+                )
             }
-
-            // Scramble Reset Button
-            Button(
-                onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    showScrambleAlert = true
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(54.dp)
-                    .testTag("reset_button"),
-                colors = ButtonDefaults.buttonColors(containerColor = Slate800),
-                shape = RoundedCornerShape(16.dp),
-                border = borderStroke()
-            ) {
-                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Trộn lại", tint = Teal400)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(text = "Trộn Lại", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 15.sp)
+            Column(horizontalAlignment = Alignment.End) {
+                Text("SỐ BƯỚC", fontSize = 9.sp, letterSpacing = 1.5.sp, color = Color(0xFF3A5A8E), fontWeight = FontWeight.Bold)
+                Text(
+                    text = movesLeft.toString(),
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.Black,
+                    color = movesColor
+                )
             }
         }
 
-        // CONFIRMATION DIALOG ALERT FOR RESET
-        if (showScrambleAlert) {
-            AlertDialog(
-                onDismissRequest = { showScrambleAlert = false },
-                title = { Text(text = "Trộn Lại Bàn Ghép", fontWeight = FontWeight.Bold, color = Color.White) },
-                text = { Text(text = "Bạn có chắc chắn muốn bỏ dở ván cũ và xáo bài ngẫu nhiên lại từ đầu?", color = Slate200) },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showScrambleAlert = false
-                            viewModel.startNewGame()
-                        }
-                    ) {
-                        Text(text = "Có, Trộn Lại", color = Rose500, fontWeight = FontWeight.Bold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showScrambleAlert = false }) {
-                        Text(text = "Hủy", color = Slate300)
-                    }
-                },
-                containerColor = Slate800,
-                shape = RoundedCornerShape(20.dp)
+        Spacer(Modifier.height(8.dp))
+
+        // Progress bar
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF0D1F45))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(animProg)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(NeonBlue, NeonCyan)
+                            )
+                        )
+                )
+            }
+            Text(
+                text = "${(progress * 100).toInt()}%",
+                fontSize = 9.sp,
+                color = NeonCyan.copy(0.8f),
+                fontWeight = FontWeight.Bold
             )
         }
-
-        // POP VICTORY OVERLAY ON COMPLETED OR WON
-        if (hasCompleted) {
-            VictoryDialog(viewModel = viewModel)
-        }
+        Text(
+            text = "Mục tiêu: ${formatScore(targetScore)} pts",
+            fontSize = 9.sp,
+            color = Color(0xFF2A4060),
+            modifier = Modifier.align(Alignment.End)
+        )
     }
 }
 
-// ----------------------------------------------------
-// TILE GRID INDIVIDUAL COMPOSABLE ITEM
-// ----------------------------------------------------
 @Composable
-fun TileCell(
-    value: Int,
-    gridSize: Int,
-    themeName: String,
-    isHint: Boolean,
-    showIndexInGradient: Boolean,
+fun ComboLabel(combo: Int) {
+    val label = when {
+        combo >= 5 -> "🌀 ×$combo  N O V A  !!"
+        combo >= 4 -> "💥 ×$combo  MEGA BLAST!"
+        combo >= 3 -> "⚡ ×$combo  CHAIN!!"
+        else       -> "✦ ×$combo  COMBO!"
+    }
+    val color = when {
+        combo >= 5 -> Color(0xFFDA22FF)
+        combo >= 4 -> Color(0xFFFF4757)
+        combo >= 3 -> Color(0xFFFFD200)
+        else       -> NeonCyan
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(color.copy(0.15f))
+            .border(1.dp, color.copy(0.6f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text = label,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Black,
+            color = color,
+            letterSpacing = 1.sp
+        )
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// GEM CELL
+// ═════════════════════════════════════════════════════════════════════════
+@Composable
+fun GemCell(
+    gemValue: Int,
+    isSelected: Boolean,
+    isExploding: Boolean,
+    isShaking: Boolean,
     onClick: () -> Unit
 ) {
-    val haptic = LocalHapticFeedback.current
-    val view = LocalView.current
-
-    if (value == 0) {
-        // Empty placeholder space
+    if (gemValue == 0) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Slate900.copy(alpha = 0.4f))
-                .border(1.2.dp, Brush.linearGradient(listOf(Slate700, Color.Transparent)), RoundedCornerShape(16.dp))
+                .clip(CircleShape)
+                .background(Color(0xFF040810))
         )
-    } else {
-        // Hint Pulse animation
-        val infiniteTransition = rememberInfiniteTransition(label = "hint_pulse")
-        val animatedScale by infiniteTransition.animateFloat(
-            initialValue = 0.96f,
-            targetValue = 1.04f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(800, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "hint_scale"
-        )
-        val scale = if (isHint) animatedScale else 1f
+        return
+    }
 
-        // Border highlighting for hint options
-        val borderHighlight = if (isHint) {
-            Brush.sweepGradient(listOf(Amber400, Color.White, Amber400))
-        } else {
-            Brush.linearGradient(listOf(Color.White.copy(alpha = 0.15f), Color.Transparent))
+    val colorIdx = (GameViewModel.gemColor(gemValue) - 1).coerceIn(0, GEM_BRUSHES.lastIndex)
+    val gemType  = GameViewModel.gemType(gemValue)
+    val glow     = GEM_GLOW_COLORS[colorIdx]
+    val icon     = GEM_ICONS[colorIdx]
+    val powerIcon = POWER_ICONS[gemType]
+
+    // Scale animation: selected → grow; exploding → shrink
+    val targetScale = when {
+        isExploding -> 0f
+        isSelected  -> 1.13f
+        else        -> 1f
+    }
+    val scale by animateFloatAsState(
+        targetValue = targetScale,
+        animationSpec = if (isExploding) tween(280, easing = FastOutLinearInEasing)
+                        else spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium),
+        label = "gem_scale"
+    )
+    val alpha by animateFloatAsState(
+        targetValue = if (isExploding) 0f else 1f,
+        animationSpec = tween(260),
+        label = "gem_alpha"
+    )
+
+    // Shake animation for invalid swap
+    val shakeAnim = remember { Animatable(0f) }
+    LaunchedEffect(isShaking) {
+        if (isShaking) {
+            shakeAnim.animateTo(0f, keyframes {
+                durationMillis = 400
+                0f    at 0
+                (-9f) at 50
+                9f    at 100
+                (-7f) at 160
+                7f    at 210
+                (-4f) at 270
+                0f    at 360
+            })
+        }
+    }
+
+    // Pulse for selected gem
+    val infiniteTransition = rememberInfiniteTransition(label = "sel_pulse")
+    val selectedGlow by infiniteTransition.animateFloat(
+        initialValue = 0.5f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+        label = "sel_glow"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .graphicsLayer(
+                scaleX = scale, scaleY = scale,
+                alpha = alpha,
+                translationX = shakeAnim.value
+            )
+    ) {
+        // Glow backdrop when selected
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(glow.copy(alpha = 0.35f * selectedGlow))
+            )
         }
 
-        val borderThickness = if (isHint) 3.dp else 1.2.dp
-
+        // Gem body
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .scaleAnimation(scale)
-                .shadow(if (isHint) 8.dp else 2.dp, RoundedCornerShape(16.dp))
-                .background(getTileBrushGradient(value, gridSize, themeName))
-                .border(borderThickness, borderHighlight, RoundedCornerShape(16.dp))
-                .clickable {
-                    onClick()
-                    // Handled inside onclick callback
-                }
-                .testTag("tile_$value"),
+                .fillMaxSize()
+                .padding(2.dp)
+                .shadow(
+                    elevation = if (isSelected) 8.dp else 2.dp,
+                    shape = CircleShape,
+                    ambientColor = glow.copy(0.5f),
+                    spotColor = glow.copy(0.8f)
+                )
+                .clip(CircleShape)
+                .background(GEM_BRUSHES[colorIdx])
+                .border(
+                    width = if (isSelected) 2.dp else 0.8.dp,
+                    color = if (isSelected) glow else glow.copy(0.3f),
+                    shape = CircleShape
+                )
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick
+                ),
             contentAlignment = Alignment.Center
         ) {
-            when (themeName) {
-                "Classic" -> {
+            // Inner highlight (glass shine)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(Color.White.copy(0.35f), Color.Transparent),
+                            center = Offset(0.3f, 0.2f),
+                            radius = 0.5f
+                        )
+                    )
+            )
+
+            // Gem icon
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                if (powerIcon != null) {
                     Text(
-                        text = value.toString(),
-                        color = Color.White,
-                        fontSize = when (gridSize) {
-                            3 -> 32.sp
-                            4 -> 26.sp
-                            else -> 20.sp
-                        },
+                        text = powerIcon,
+                        fontSize = 14.sp
+                    )
+                } else {
+                    Text(
+                        text = icon,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Black,
-                        textAlign = TextAlign.Center
+                        color = Color.White.copy(0.9f)
                     )
-                }
-                "Emoji" -> {
-                    Text(
-                        text = EMOJI_LIST.getOrElse(value - 1) { "🦊" },
-                        fontSize = when (gridSize) {
-                            3 -> 42.sp
-                            4 -> 34.sp
-                            else -> 26.sp
-                        },
-                        textAlign = TextAlign.Center
-                    )
-                }
-                "Gradient" -> {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        if (showIndexInGradient) {
-                            Text(
-                                text = value.toString(),
-                                color = Color.White.copy(alpha = 0.5f),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(5.dp)
-                            )
-                        }
-                    }
                 }
             }
         }
     }
 }
 
-// Custom scale extension
+// ═════════════════════════════════════════════════════════════════════════
+// VICTORY DIALOG
+// ═════════════════════════════════════════════════════════════════════════
 @Composable
-fun Modifier.scaleAnimation(scale: Float): Modifier {
-    return this.graphicsLayer(scaleX = scale, scaleY = scale)
-}
-
-@Composable
-fun getTileBrushGradient(value: Int, gridSize: Int, themeName: String): Brush {
-    return when (themeName) {
-        "Classic" -> {
-            Brush.verticalGradient(
-                listOf(Slate600, Slate700)
-            )
-        }
-        "Emoji" -> {
-            // Warm playful gradient ranges based on tile identifier
-            val colors = when (value % 4) {
-                0 -> listOf(Color(0xFF818CF8), Color(0xFF4F46E5)) // Soft Indigo Blue
-                1 -> listOf(Color(0xFFF472B6), Color(0xFFDB2777)) // Soft Pink
-                2 -> listOf(Color(0xFF34D399), Color(0xFF059669)) // Soft Green
-                else -> listOf(Color(0xFFFBBF24), Color(0xFFD97706)) // Soft Peach Amber
-            }
-            Brush.verticalGradient(colors)
-        }
-        "Gradient" -> {
-            val baseColor = calculateColorForSpectrumGrid(value, gridSize)
-            Brush.verticalGradient(
-                colors = listOf(
-                    baseColor.copy(
-                        red = (baseColor.red + 0.1f).coerceIn(0f, 1f),
-                        green = (baseColor.green + 0.1f).coerceIn(0f, 1f),
-                        blue = (baseColor.blue + 0.1f).coerceIn(0f, 1f)
-                    ),
-                    baseColor,
-                    baseColor.copy(
-                        red = (baseColor.red - 0.1f).coerceIn(0f, 1f),
-                        green = (baseColor.green - 0.1f).coerceIn(0f, 1f),
-                        blue = (baseColor.blue - 0.1f).coerceIn(0f, 1f)
-                    )
-                )
-            )
-        }
-        else -> Brush.verticalGradient(listOf(Slate700, Slate800))
-    }
-}
-
-fun calculateColorForSpectrumGrid(value: Int, gridSize: Int): Color {
-    val destIdx = value - 1
-    val r = destIdx / gridSize
-    val c = destIdx % gridSize
-    
-    val t_h = if (gridSize > 1) c.toFloat() / (gridSize - 1) else 0f
-    val t_v = if (gridSize > 1) r.toFloat() / (gridSize - 1) else 0f
-    
-    // Smooth Tropical Gradient coordinates
-    val topLeft = Color(0xFFFF5E62) // Peach Coral
-    val topRight = Color(0xFFF12711) // Intense Red
-    val bottomLeft = Color(0xFF6366F1) // Velvet Indigo
-    val bottomRight = Color(0xFF00FFF0) // Turquoise Ice
-    
-    val top = blendTwoColors(topLeft, topRight, t_h)
-    val bottom = blendTwoColors(bottomLeft, bottomRight, t_h)
-    
-    return blendTwoColors(top, bottom, t_v)
-}
-
-fun blendTwoColors(c1: Color, c2: Color, percentage: Float): Color {
-    val r = c1.red + (c2.red - c1.red) * percentage
-    val g = c1.green + (c2.green - c1.green) * percentage
-    val b = c1.blue + (c2.blue - c1.blue) * percentage
-    val a = c1.alpha + (c2.alpha - c1.alpha) * percentage
-    return Color(r.coerceIn(0f, 1f), g.coerceIn(0f, 1f), b.coerceIn(0f, 1f), a.coerceIn(0f, 1f))
-}
-
-// ----------------------------------------------------
-// DIALOG: VICTORY CELEBRATION CONGRATS CARD
-// ----------------------------------------------------
-@Composable
-fun VictoryDialog(viewModel: GameViewModel) {
-    val moves by viewModel.moves.collectAsStateWithLifecycle()
-    val timeLimitSecs by viewModel.timeSecs.collectAsStateWithLifecycle()
-    val themeName by viewModel.themeName.collectAsStateWithLifecycle()
-    val size by viewModel.gridSize.collectAsStateWithLifecycle()
+fun VictoryDialog(vm: GameViewModel, stars: Int, score: Int, cfg: LevelConfig) {
     val haptic = LocalHapticFeedback.current
 
-    // Confetti particles local states for realtime gravity simulation
-    val confettiList = remember {
-        mutableStateListOf<ConfettiParticle>().apply {
-            addAll(
-                List(60) {
-                    ConfettiParticle(
-                        x = (0..1000).random().toFloat(),
-                        y = -(50..400).random().toFloat(),
-                        speedX = (-4..4).random().toFloat(),
-                        speedY = (4..12).random().toFloat(),
-                        size = (12..28).random().toFloat(),
-                        rotation = (0..360).random().toFloat(),
-                        rotationSpeed = (-4..4).random().toFloat(),
-                        color = listOf(
-                            Color(0xFFFF5E62), Color(0xFFFBBF24), Color(0xFF34D399),
-                            Color(0xFF22D3EE), Color(0xFFA855F7), Color(0xFFEC4899)
-                        ).random()
-                    )
-                }
-            )
+    // Confetti particles
+    val sparks = remember {
+        mutableStateListOf<NovaSpark>().apply {
+            addAll(List(70) {
+                NovaSpark(
+                    x = (0..1000).random().toFloat(),
+                    y = -(100..600).random().toFloat(),
+                    vx = (-5..5).random().toFloat(),
+                    vy = (5..14).random().toFloat(),
+                    size = (10..24).random().toFloat(),
+                    rot = (0..360).random().toFloat(),
+                    rotV = (-5..5).random().toFloat(),
+                    color = SPARK_COLORS.random()
+                )
+            })
         }
     }
 
-    // Ticker frame animation to gravity advance particles
-    var frameTick by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) {
         while (true) {
-            withFrameMillis { frameTime ->
-                frameTick = frameTime
-                confettiList.forEach { p ->
-                    p.y += p.speedY
-                    p.x += p.speedX
-                    p.rotation += p.rotationSpeed
-                    // Re-loop on bottom screen boundaries
-                    if (p.y > 2200) {
-                        p.y = -50f
-                        p.x = (0..1000).random().toFloat()
-                    }
+            withFrameMillis {
+                sparks.forEach { p ->
+                    p.x += p.vx; p.y += p.vy; p.rot += p.rotV
+                    if (p.y > 2400) { p.y = -80f; p.x = (0..1000).random().toFloat() }
                 }
             }
+        }
+    }
+
+    // Star reveal animation (one by one)
+    var revealedStars by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        delay(300)
+        for (i in 1..stars) {
+            revealedStars = i
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            delay(350)
         }
     }
 
     Dialog(
-        onDismissRequest = { /* Force choose menu items to close on victory to prevent state errors */ },
+        onDismissRequest = {},
         properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Transparent),
+            modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            // Live Floating Confetti Simulation on Canvas Layer background
+            // Particle canvas layer
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val canvasUnitsFactorX = size.toFloat() // Scale factor helper
-                confettiList.forEach { p ->
-                    // Map logical design sizes to layout canvas surface dimensions
-                    val mappedX = (p.x / 1000f) * this.size.width
-                    val mappedY = p.y // Keep simple pixel falls
-                    
-                    rotate(p.rotation, pivot = Offset(mappedX, mappedY)) {
+                sparks.forEach { p ->
+                    val mx = (p.x / 1000f) * size.width
+                    rotate(p.rot, Offset(mx, p.y)) {
                         drawRect(
                             color = p.color,
-                            topLeft = Offset(mappedX - p.size/2, mappedY - p.size/2),
+                            topLeft = Offset(mx - p.size / 2, p.y - p.size / 2),
                             size = androidx.compose.ui.geometry.Size(p.size, p.size)
                         )
                     }
                 }
             }
 
-            // Beautiful interactive dialogue presentation
-            Card(
-                shape = RoundedCornerShape(32.dp),
-                colors = CardDefaults.cardColors(containerColor = Slate800),
-                border = androidx.compose.foundation.BorderStroke(2.dp, Teal400),
+            // Card
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp)
-                    .shadow(16.dp, RoundedCornerShape(32.dp)),
+                    .padding(horizontal = 10.dp)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xFF080E20))
+                    .border(2.dp, NeonCyan.copy(0.7f), RoundedCornerShape(28.dp))
+                    .padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                Text("🏆", fontSize = 48.sp)
+                Text(
+                    text = "LEVEL ${cfg.level} HOÀN THÀNH!",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Black,
+                    color = NeonCyan,
+                    letterSpacing = 1.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                // Animated stars
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    repeat(3) { i ->
+                        val visible = i < revealedStars
+                        val starScale by animateFloatAsState(
+                            targetValue = if (visible) 1f else 0.2f,
+                            animationSpec = spring(Spring.DampingRatioMediumBouncy),
+                            label = "star$i"
+                        )
+                        Text(
+                            text = "★",
+                            fontSize = 38.sp,
+                            color = if (visible) Color(0xFFFFD200) else Color(0xFF1A2A4A),
+                            modifier = Modifier.graphicsLayer(scaleX = starScale, scaleY = starScale)
+                        )
+                    }
+                }
+
+                // Score + stars label
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Trophy visual representation
-                    Box(
-                        modifier = Modifier
-                            .size(76.dp)
-                            .background(Amber400.copy(alpha = 0.15f), CircleShape)
-                            .border(1.5.dp, Amber400, CircleShape),
-                        contentAlignment = Alignment.Center
+                    StatCard(label = "ĐIỂM ĐẠT", value = formatScore(score), color = NeonCyan, modifier = Modifier.weight(1f))
+                    StatCard(label = "MỤC TIÊU", value = formatScore(cfg.targetScore), color = Color(0xFF4A7EC0), modifier = Modifier.weight(1f))
+                }
+
+                HorizontalDivider(color = SpaceBorder.copy(0.5f))
+
+                // Action buttons
+                if (cfg.level < LEVEL_CONFIGS.size) {
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            vm.startNextLevel()
+                        },
+                        modifier = Modifier.fillMaxWidth().height(50.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonCyan),
+                        shape = RoundedCornerShape(14.dp)
                     ) {
-                        Text(text = "🏆", fontSize = 42.sp)
+                        Text("LEVEL TIẾP THEO ▶", fontWeight = FontWeight.Black, color = Color(0xFF060A18), fontSize = 15.sp)
                     }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            vm.restartLevel()
+                        },
+                        modifier = Modifier.weight(1f).height(46.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SpaceBorder),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Chơi Lại", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "CHÚC MỪNG!",
-                            fontSize = 26.sp,
-                            fontWeight = FontWeight.Black,
-                            color = Teal400,
-                            letterSpacing = 2.sp
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Bạn đã hoàn thành thử thách xuất sắc!",
-                            fontSize = 13.sp,
-                            color = Slate300,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-
-                    Divider(color = Slate700)
-
-                    // Results block
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // Moves card
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(containerColor = Slate900),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(text = "Tổng Bước", fontSize = 11.sp, color = Slate500, fontWeight = FontWeight.Bold)
-                                Text(text = "$moves", fontSize = 20.sp, color = Color.White, fontWeight = FontWeight.Black)
-                            }
-                        }
-
-                        // Time Card
-                        Card(
-                            modifier = Modifier.weight(1f),
-                            colors = CardDefaults.cardColors(containerColor = Slate900),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(text = "Thời Gian", fontSize = 11.sp, color = Slate500, fontWeight = FontWeight.Bold)
-                                Text(text = formatSeconds(timeLimitSecs), fontSize = 20.sp, color = Teal400, fontWeight = FontWeight.Black)
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // Buttons CTA block
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.startNewGame()
-                            },
-                            modifier = Modifier.fillMaxWidth().height(52.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Teal400),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text(text = "VÁN GHÉP MỚI", fontWeight = FontWeight.Black, color = Slate900)
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                viewModel.setScreenState(ScreenState.Menu)
-                            },
-                            modifier = Modifier.fillMaxWidth().height(50.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                            border = borderStroke()
-                        ) {
-                            Text(text = "Về Trang Chủ", fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    OutlinedButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            vm.setPhase(GamePhase.MENU)
+                        },
+                        modifier = Modifier.weight(1f).height(46.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4A7EC0)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SpaceBorder),
+                        shape = RoundedCornerShape(12.dp)
+                    ) { Text("Menu", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
                 }
             }
         }
     }
 }
 
-// ----------------------------------------------------
-// SCREEN 3: HIGH SCORES LEADERBOARD
-// ----------------------------------------------------
+// ═════════════════════════════════════════════════════════════════════════
+// GAME OVER DIALOG
+// ═════════════════════════════════════════════════════════════════════════
 @Composable
-fun LeaderboardScreen(viewModel: GameViewModel) {
-    var specTabSize by remember { mutableStateOf(4) } // 3x3, 4x4, 5x5 tabs
+fun GameOverDialog(vm: GameViewModel, score: Int, cfg: LevelConfig) {
     val haptic = LocalHapticFeedback.current
-    val view = LocalView.current
+    val progress = (score.toFloat() / cfg.targetScore).coerceIn(0f, 1f)
 
-    // Observe Room database reactive lists
-    val list3 by viewModel.bestScores3x3.collectAsStateWithLifecycle()
-    val list4 by viewModel.bestScores4x4.collectAsStateWithLifecycle()
-    val list5 by viewModel.bestScores5x5.collectAsStateWithLifecycle()
-
-    val currentScores = when (specTabSize) {
-        3 -> list3
-        4 -> list4
-        else -> list5
-    }
-
-    var showClearConfirm by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+    Dialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
     ) {
-        // Task bar
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    if (viewModel.soundEnabled.value) view.playSoundEffect(SoundEffectConstants.CLICK)
-                    viewModel.setScreenState(ScreenState.Menu)
-                },
-                modifier = Modifier.background(Slate800, CircleShape)
-            ) {
-                Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Trở về", tint = Color.White)
-            }
-
-            Text(
-                text = "KỶ LỤC ZEN TILE",
-                fontWeight = FontWeight.Black,
-                letterSpacing = 1.sp,
-                fontSize = 18.sp,
-                color = Color.White
-            )
-
-            // Clear scores trash can bin icon
-            IconButton(
-                onClick = {
-                    if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    showClearConfirm = true
-                },
-                modifier = Modifier.background(Slate800, CircleShape)
-            ) {
-                Icon(imageVector = Icons.Default.Delete, contentDescription = "Xóa lịch sử", tint = Rose500)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Segmented Tabs
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(Slate800)
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .background(Color(0xFF080E20))
+                .border(2.dp, Color(0xFFFF4757).copy(0.6f), RoundedCornerShape(28.dp))
+                .padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            val sizes = listOf(3, 4, 5)
-            sizes.forEach { sizeValue ->
-                val isSelected = specTabSize == sizeValue
+            Text("💀", fontSize = 48.sp)
+            Text(
+                text = "HẾT BƯỚC!",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Black,
+                color = Color(0xFFFF4757),
+                letterSpacing = 2.sp
+            )
+            Text(
+                text = "Bạn đạt ${formatScore(score)} / ${formatScore(cfg.targetScore)} điểm",
+                fontSize = 13.sp,
+                color = Color(0xFF4A7EC0),
+                textAlign = TextAlign.Center
+            )
+
+            // Progress bar showing how close
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Đạt được ${(progress * 100).toInt()}% mục tiêu",
+                    fontSize = 11.sp,
+                    color = Color(0xFF3A5A8E)
+                )
+                Spacer(Modifier.height(4.dp))
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) Indigo500 else Color.Transparent)
-                        .clickable {
-                            if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            if (viewModel.soundEnabled.value) view.playSoundEffect(SoundEffectConstants.CLICK)
-                            specTabSize = sizeValue
-                        }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFF0D1F45))
                 ) {
-                    Text(
-                        text = "${sizeValue}x${sizeValue}",
-                        fontWeight = FontWeight.Bold,
-                        color = if (isSelected) Color.White else Slate300,
-                        fontSize = 15.sp
+                    val animProg by animateFloatAsState(targetValue = progress, tween(600), label = "fail_prog")
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(animProg)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Brush.horizontalGradient(listOf(Color(0xFFFF4757), Color(0xFFFFD200))))
                     )
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            HorizontalDivider(color = SpaceBorder.copy(0.5f))
 
-        // Records list
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .clip(RoundedCornerShape(24.dp))
-                .background(Slate800)
-                .border(1.2.dp, Slate700, RoundedCornerShape(24.dp))
-                .padding(14.dp)
-        ) {
-            if (currentScores.isEmpty()) {
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(text = "🧘", fontSize = 48.sp)
-                    Text(
-                        text = "Chưa có kỷ lục nào cả",
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        fontSize = 16.sp
-                    )
-                    Text(
-                        text = "Hãy hoàn thành ván ghép để lưu kỷ lục của bạn!",
-                        fontSize = 12.sp,
-                        color = Slate500,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    lazyListItemsIndexed(currentScores) { index, item ->
-                        ScoreRow(rank = index + 1, score = item)
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        // Return button CTA
-        Button(
-            onClick = {
-                if (viewModel.hapticEnabled.value) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                viewModel.setScreenState(ScreenState.Menu)
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo500),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Text(text = "Trở Về Trang Chủ", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-        }
-
-        // CONFIRM CLEAN HISTORY DIALOG ALERT
-        if (showClearConfirm) {
-            AlertDialog(
-                onDismissRequest = { showClearConfirm = false },
-                title = { Text(text = "Xóa Lịch Sử Kỷ Lục", fontWeight = FontWeight.Bold, color = Color.White) },
-                text = { Text(text = "Hành động này sẽ xóa toàn bộ danh sách kỷ lục hiện có và không thể phục hồi. Bạn chắc chắn?", color = Slate200) },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showClearConfirm = false
-                            viewModel.clearHistory()
-                        }
-                    ) {
-                        Text(text = "Xóa Toàn Bộ", color = Rose500, fontWeight = FontWeight.Bold)
-                    }
+            Button(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    vm.restartLevel()
                 },
-                dismissButton = {
-                    TextButton(onClick = { showClearConfirm = false }) {
-                        Text(text = "Hủy", color = Slate300)
-                    }
-                },
-                containerColor = Slate800,
-                shape = RoundedCornerShape(20.dp)
-            )
-        }
-    }
-}
-
-// ----------------------------------------------------
-// INDIVIDUAL SCORE ROW CARD WRAPPER
-// ----------------------------------------------------
-@Composable
-fun ScoreRow(rank: Int, score: GameScore) {
-    val rankBadge = when (rank) {
-        1 -> "🥇"
-        2 -> "🥈"
-        3 -> "🥉"
-        else -> "🍀"
-    }
-
-    val vietThemeLabel = when (score.themeName) {
-        "Classic" -> "Cơ Bản"
-        "Emoji" -> "Thú Vui"
-        else -> "Gradient"
-    }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Slate900)
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4757)),
+                shape = RoundedCornerShape(14.dp)
             ) {
-                Text(text = rankBadge, fontSize = 20.sp)
-                Column {
-                    Text(
-                        text = formatDateString(score.timestamp),
-                        fontSize = 11.sp,
-                        color = Slate500
-                    )
-                    Text(
-                        text = "Chủ đề: $vietThemeLabel",
-                        fontSize = 12.sp,
-                        color = Slate300
-                    )
-                }
+                Text("THỬ LẠI ↺", fontWeight = FontWeight.Black, fontSize = 15.sp)
             }
 
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    text = formatSeconds(score.timeSecs),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Teal400
-                )
-                Text(
-                    text = "${score.moves} bước ghép",
-                    fontSize = 11.sp,
-                    color = Slate300
-                )
-            }
+            OutlinedButton(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    vm.setPhase(GamePhase.MENU)
+                },
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF4A7EC0)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, SpaceBorder),
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("Về Menu", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
         }
     }
 }
 
-// ----------------------------------------------------
-// UTILITY STRING BUILDERS
-// ----------------------------------------------------
-fun formatSeconds(totalSecs: Int): String {
-    val m = totalSecs / 60
-    val s = totalSecs % 60
-    return String.format(Locale.getDefault(), "%02d:%02d", m, s)
+// ═════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═════════════════════════════════════════════════════════════════════════
+@Composable
+fun StatCard(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF060C1A))
+            .border(1.dp, SpaceBorder.copy(0.5f), RoundedCornerShape(14.dp))
+            .padding(12.dp)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+            Text(label, fontSize = 9.sp, letterSpacing = 1.sp, color = Color(0xFF3A5A8E), fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(2.dp))
+            Text(value, fontSize = 18.sp, fontWeight = FontWeight.Black, color = color)
+        }
+    }
 }
 
-fun formatDateString(timestamp: Long): String {
-    val sdf = SimpleDateFormat("dd/MM - HH:mm", Locale.getDefault())
-    return sdf.format(Date(timestamp))
+fun formatScore(n: Int): String = when {
+    n >= 1_000_000 -> "${n / 1_000_000}.${(n % 1_000_000) / 100_000}M"
+    n >= 1_000     -> "${n / 1000}.${(n % 1000) / 100}K"
+    else            -> n.toString()
 }
+
+fun formatDate(ts: Long): String =
+    SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date(ts))

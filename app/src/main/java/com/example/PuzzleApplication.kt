@@ -10,10 +10,10 @@ class PuzzleApplication : Application() {
         Room.databaseBuilder(
             this,
             AppDatabase::class.java,
-            "zen_tile_puzzle.db"
-        ).build()
+            "nova_blast.db"
+        ).fallbackToDestructiveMigration().build()
     }
-    
+
     val repository by lazy {
         GameRepository(database.gameDao())
     }

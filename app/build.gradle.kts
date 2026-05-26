@@ -1,9 +1,24 @@
+import java.util.Base64
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
+}
+
+// Automatically recreate debug.keystore from debug.keystore.base64 if missing (e.g., for local developer machines)
+val keystoreFile = file("${rootDir}/debug.keystore")
+val base64File = file("${rootDir}/debug.keystore.base64")
+if (!keystoreFile.exists() && base64File.exists()) {
+  try {
+    val sanitized = base64File.readText().trim().replace("\\s".toRegex(), "")
+    val decoded = Base64.getDecoder().decode(sanitized)
+    keystoreFile.writeBytes(decoded)
+  } catch (e: Exception) {
+    project.logger.error("Failed to recreate debug.keystore from base64: ${e.message}")
+  }
 }
 
 android {

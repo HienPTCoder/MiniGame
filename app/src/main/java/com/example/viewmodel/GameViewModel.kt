@@ -4,8 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.PuzzleApplication
-import com.example.data.GameScore
-import com.example.data.GameState
+import com.example.data.LevelScore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,381 +15,405 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-enum class ScreenState {
-    Menu,
-    Playing,
-    Scores
+// ── Screen Phases ──────────────────────────────────────────────────────────
+enum class GamePhase {
+    MENU, PLAYING, PROCESSING, LEVEL_COMPLETE, GAME_OVER, LEADERBOARD
 }
 
+// ── Level Configs ──────────────────────────────────────────────────────────
+data class LevelConfig(
+    val level: Int,
+    val name: String,
+    val targetScore: Int,
+    val maxMoves: Int
+)
+
+val LEVEL_CONFIGS = listOf(
+    LevelConfig(1,  "Tập Sự",       500,   20),
+    LevelConfig(2,  "Bước Đầu",     1000,  22),
+    LevelConfig(3,  "Thử Sức",      1800,  22),
+    LevelConfig(4,  "Leo Thang",    2800,  25),
+    LevelConfig(5,  "Nóng Bỏng",   4000,  25),
+    LevelConfig(6,  "Cực Đỉnh",    5500,  25),
+    LevelConfig(7,  "Bùng Cháy",   7500,  28),
+    LevelConfig(8,  "Hỗn Loạn",   10000,  28),
+    LevelConfig(9,  "Thần Kinh",  13000,  25),
+    LevelConfig(10, "NOVA MASTER",18000,  25)
+)
+
+// ── ViewModel ─────────────────────────────────────────────────────────────
 class GameViewModel(application: Application) : AndroidViewModel(application) {
+
+    companion object {
+        const val GRID_ROWS  = 7
+        const val GRID_COLS  = 7
+        const val GEM_COLORS = 6
+
+        // Gem encoding: 0=empty, 1-6=normal gem, 11-16=lightning, 21-26=bomb, 31-36=nova
+        fun gemColor(v: Int): Int = if (v <= 0) 0 else ((v - 1) % 10) + 1
+        fun gemType(v: Int): Int  = if (v <= 0) 0 else (v - 1) / 10
+        fun makeGem(color: Int, type: Int = 0): Int = type * 10 + color
+    }
+
     private val repository = (application as PuzzleApplication).repository
 
-    // Screen navigation state
-    private val _screenState = MutableStateFlow(ScreenState.Menu)
-    val screenState: StateFlow<ScreenState> = _screenState.asStateFlow()
+    // ── State Flows ──────────────────────────────────────────────────────
+    private val _gamePhase = MutableStateFlow(GamePhase.MENU)
+    val gamePhase: StateFlow<GamePhase> = _gamePhase.asStateFlow()
 
-    // Game variables
-    private val _gridSize = MutableStateFlow(4) // Default is 4x4
-    val gridSize: StateFlow<Int> = _gridSize.asStateFlow()
+    private val _board = MutableStateFlow<List<Int>>(emptyList())
+    val board: StateFlow<List<Int>> = _board.asStateFlow()
 
-    private val _themeName = MutableStateFlow("Classic") // "Classic", "Emoji", "Gradient"
-    val themeName: StateFlow<String> = _themeName.asStateFlow()
+    private val _selectedIndex = MutableStateFlow<Int?>(null)
+    val selectedIndex: StateFlow<Int?> = _selectedIndex.asStateFlow()
 
-    private val _tiles = MutableStateFlow<List<Int>>(emptyList())
-    val tiles: StateFlow<List<Int>> = _tiles.asStateFlow()
+    private val _explodingIndices = MutableStateFlow<Set<Int>>(emptySet())
+    val explodingIndices: StateFlow<Set<Int>> = _explodingIndices.asStateFlow()
 
-    private val _moves = MutableStateFlow(0)
-    val moves: StateFlow<Int> = _moves.asStateFlow()
+    private val _shakeIndex = MutableStateFlow<Int?>(null)
+    val shakeIndex: StateFlow<Int?> = _shakeIndex.asStateFlow()
 
-    private val _timeSecs = MutableStateFlow(0)
-    val timeSecs: StateFlow<Int> = _timeSecs.asStateFlow()
+    private val _score = MutableStateFlow(0)
+    val score: StateFlow<Int> = _score.asStateFlow()
 
-    private val _isCompleted = MutableStateFlow(false)
-    val isCompleted: StateFlow<Boolean> = _isCompleted.asStateFlow()
+    private val _movesLeft = MutableStateFlow(20)
+    val movesLeft: StateFlow<Int> = _movesLeft.asStateFlow()
 
-    private val _isPaused = MutableStateFlow(false)
-    val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
+    private val _currentLevel = MutableStateFlow(1)
+    val currentLevel: StateFlow<Int> = _currentLevel.asStateFlow()
 
-    private val _hasActiveSavedGame = MutableStateFlow(false)
-    val hasActiveSavedGame: StateFlow<Boolean> = _hasActiveSavedGame.asStateFlow()
+    private val _combo = MutableStateFlow(0)
+    val combo: StateFlow<Int> = _combo.asStateFlow()
 
-    // Settings
-    private val _soundEnabled = MutableStateFlow(true)
-    val soundEnabled: StateFlow<Boolean> = _soundEnabled.asStateFlow()
+    private val _stars = MutableStateFlow(0)
+    val stars: StateFlow<Int> = _stars.asStateFlow()
 
-    private val _hapticEnabled = MutableStateFlow(true)
-    val hapticEnabled: StateFlow<Boolean> = _hapticEnabled.asStateFlow()
+    private val _levelBestStars = MutableStateFlow<Map<Int, Int>>(emptyMap())
+    val levelBestStars: StateFlow<Map<Int, Int>> = _levelBestStars.asStateFlow()
 
-    private val _showIndicesInGradient = MutableStateFlow(false)
-    val showIndicesInGradient: StateFlow<Boolean> = _showIndicesInGradient.asStateFlow()
+    val topScores = repository.getTopScores().stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+    )
 
-    // Smart Hint index
-    private val _hintTileValue = MutableStateFlow<Int?>(null)
-    val hintTileValue: StateFlow<Int?> = _hintTileValue.asStateFlow()
+    private var processingJob: Job? = null
 
-    // High Scores flow
-    val bestScores3x3 = repository.getBestScores(3).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    val bestScores4x4 = repository.getBestScores(4).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    val bestScores5x5 = repository.getBestScores(5).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-    
-    // Timer Job
-    private var timerJob: Job? = null
+    init { loadLevelStars() }
 
-    init {
-        checkSavedGamePresence()
-    }
-
-    fun toggleSound() { _soundEnabled.value = !_soundEnabled.value }
-    fun toggleHaptic() { _hapticEnabled.value = !_hapticEnabled.value }
-    fun toggleShowIndicesInGradient() { _showIndicesInGradient.value = !_showIndicesInGradient.value }
-
-    fun checkSavedGamePresence() {
+    // ── Level Helpers ─────────────────────────────────────────────────────
+    private fun loadLevelStars() {
         viewModelScope.launch {
-            val savedGame = repository.getActiveGame()
-            _hasActiveSavedGame.value = savedGame != null
-        }
-    }
-
-    fun setScreenState(state: ScreenState) {
-        _screenState.value = state
-        if (state == ScreenState.Playing) {
-            resumeTimer()
-        } else {
-            pauseTimerStateOnly()
-        }
-    }
-
-    fun selectGridSize(size: Int) {
-        _gridSize.value = size
-    }
-
-    fun selectTheme(theme: String) {
-        _themeName.value = theme
-    }
-
-    // New Game Setup
-    fun startNewGame() {
-        val size = _gridSize.value
-        val solvedBoard = (1 until size * size).toList() + listOf(0)
-        
-        // Let's scramble the board by making random legal moves to ensure 100% solvability
-        val scrambledBoard = scramble(solvedBoard, size)
-        
-        _tiles.value = scrambledBoard
-        _moves.value = 0
-        _timeSecs.value = 0
-        _isCompleted.value = false
-        _isPaused.value = false
-        _hintTileValue.value = null
-        _screenState.value = ScreenState.Playing
-        
-        startTimer()
-        saveCurrentGameState()
-    }
-
-    private fun scramble(solved: List<Int>, size: Int): List<Int> {
-        val board = solved.toMutableList()
-        var emptyIndex = board.indexOf(0)
-        
-        // Perform many valid swap moves
-        val randomIterations = when (size) {
-            3 -> 60
-            4 -> 120
-            else -> 180
-        }
-        
-        var lastSwappedValue = -1
-        for (i in 0 until randomIterations) {
-            val possibleIndices = getAdjacentIndices(emptyIndex, size)
-            // Filter out the inverse of the last move to make scramble more random
-            val candidates = possibleIndices.filter { board[it] != lastSwappedValue }
-            val chosenIndex = if (candidates.isNotEmpty()) candidates.random() else possibleIndices.random()
-            
-            lastSwappedValue = board[chosenIndex]
-            
-            // Swap
-            board[emptyIndex] = board[chosenIndex]
-            board[chosenIndex] = 0
-            emptyIndex = chosenIndex
-        }
-        
-        // Ensure it doesn't accidentally start solved
-        if (board == solved) {
-            // Swap two adjacent valid indices
-            val possible = getAdjacentIndices(emptyIndex, size)
-            if (possible.isNotEmpty()) {
-                val idx = possible.first()
-                board[emptyIndex] = board[idx]
-                board[idx] = 0
+            val map = mutableMapOf<Int, Int>()
+            for (lvl in 1..LEVEL_CONFIGS.size) {
+                repository.getBestScoreForLevel(lvl)?.let { map[lvl] = it.stars }
             }
+            _levelBestStars.value = map
         }
-        
+    }
+
+    fun getLevelConfig(level: Int = _currentLevel.value): LevelConfig =
+        LEVEL_CONFIGS.getOrElse(level - 1) { LEVEL_CONFIGS.last() }
+
+    fun setPhase(phase: GamePhase) { _gamePhase.value = phase }
+
+    // ── Game Control ──────────────────────────────────────────────────────
+    fun startLevel(level: Int) {
+        processingJob?.cancel()
+        _currentLevel.value = level
+        val cfg = getLevelConfig(level)
+        _score.value      = 0
+        _movesLeft.value  = cfg.maxMoves
+        _combo.value      = 0
+        _stars.value      = 0
+        _selectedIndex.value    = null
+        _explodingIndices.value = emptySet()
+        _shakeIndex.value       = null
+        _board.value = generateBoard()
+        _gamePhase.value = GamePhase.PLAYING
+    }
+
+    fun restartLevel() { startLevel(_currentLevel.value) }
+
+    fun startNextLevel() {
+        val next = _currentLevel.value + 1
+        if (next <= LEVEL_CONFIGS.size) startLevel(next)
+        else _gamePhase.value = GamePhase.MENU
+    }
+
+    // ── Board Generation ──────────────────────────────────────────────────
+    private fun generateBoard(): List<Int> {
+        var board: List<Int>
+        var attempts = 0
+        do {
+            board = generateBoardNoMatches()
+            attempts++
+        } while (!hasValidMoves(board) && attempts < 20)
         return board
     }
 
-    private fun getAdjacentIndices(index: Int, size: Int): List<Int> {
-        val list = mutableListOf<Int>()
-        val r = index / size
-        val c = index % size
-        
-        if (r > 0) list.add((r - 1) * size + c) // Up
-        if (r < size - 1) list.add((r + 1) * size + c) // Down
-        if (c > 0) list.add(r * size + (c - 1)) // Left
-        if (c < size - 1) list.add(r * size + (c + 1)) // Right
-        
-        return list
+    private fun generateBoardNoMatches(): List<Int> {
+        val board = MutableList(GRID_ROWS * GRID_COLS) { 0 }
+        for (i in board.indices) {
+            val row = i / GRID_COLS
+            val col = i % GRID_COLS
+            val forbidden = mutableSetOf<Int>()
+            // Horizontal: last 2 same color
+            if (col >= 2) {
+                val a = gemColor(board[i - 1]); val b = gemColor(board[i - 2])
+                if (a != 0 && a == b) forbidden.add(a)
+            }
+            // Vertical: last 2 same color
+            if (row >= 2) {
+                val a = gemColor(board[i - GRID_COLS]); val b = gemColor(board[i - 2 * GRID_COLS])
+                if (a != 0 && a == b) forbidden.add(a)
+            }
+            val available = (1..GEM_COLORS).filter { it !in forbidden }
+            board[i] = if (available.isNotEmpty()) available.random() else (1..GEM_COLORS).random()
+        }
+        return board
     }
 
-    // Try moving a tile by passing its Index in the _tiles list
-    fun moveTileByIndex(index: Int): Boolean {
-        if (_isCompleted.value || _isPaused.value) return false
-        
-        val size = _gridSize.value
-        val tilesList = _tiles.value.toMutableList()
-        val emptyIndex = tilesList.indexOf(0)
-        
-        // Check if adjacent orthogonally
-        val r1 = index / size
-        val c1 = index % size
-        val r2 = emptyIndex / size
-        val c2 = emptyIndex % size
-        
-        val isAdjacent = (abs(r1 - r2) == 1 && c1 == c2) || (abs(c1 - c2) == 1 && r1 == r2)
-        
-        if (isAdjacent) {
-            // Swap!
-            tilesList[emptyIndex] = tilesList[index]
-            tilesList[index] = 0
-            _tiles.value = tilesList
-            _moves.value += 1
-            _hintTileValue.value = null // Reset hint on move
-            
-            // Check solved!
-            checkVictory()
-            
-            if (!_isCompleted.value) {
-                saveCurrentGameState()
+    // ── Player Input ──────────────────────────────────────────────────────
+    fun onGemClick(index: Int) {
+        if (_gamePhase.value != GamePhase.PLAYING) return
+        val prev = _selectedIndex.value
+
+        when {
+            prev == null -> {
+                _selectedIndex.value = index
             }
-            return true
+            prev == index -> {
+                _selectedIndex.value = null
+            }
+            else -> {
+                val r1 = prev / GRID_COLS;  val c1 = prev % GRID_COLS
+                val r2 = index / GRID_COLS; val c2 = index % GRID_COLS
+                // If not adjacent, reselect
+                if (abs(r1 - r2) + abs(c1 - c2) != 1) {
+                    _selectedIndex.value = index
+                    return
+                }
+
+                // Simulate swap and validate
+                val testBoard = _board.value.toMutableList()
+                val tmp = testBoard[prev]; testBoard[prev] = testBoard[index]; testBoard[index] = tmp
+
+                if (findAllMatches(testBoard).isEmpty()) {
+                    // Invalid — shake animation
+                    _selectedIndex.value = null
+                    viewModelScope.launch {
+                        _shakeIndex.value = prev
+                        delay(500)
+                        _shakeIndex.value = null
+                    }
+                } else {
+                    // Valid swap!
+                    _selectedIndex.value = null
+                    _board.value = testBoard
+                    _movesLeft.value -= 1
+                    processingJob?.cancel()
+                    processingJob = viewModelScope.launch { processChainReaction() }
+                }
+            }
+        }
+    }
+
+    // ── Match Detection ───────────────────────────────────────────────────
+    private fun findAllMatches(board: List<Int>): List<Set<Int>> {
+        val groups = mutableListOf<Set<Int>>()
+
+        // Horizontal
+        for (row in 0 until GRID_ROWS) {
+            var col = 0
+            while (col < GRID_COLS) {
+                val color = gemColor(board[row * GRID_COLS + col])
+                if (color == 0) { col++; continue }
+                var len = 1
+                while (col + len < GRID_COLS && gemColor(board[row * GRID_COLS + col + len]) == color) len++
+                if (len >= 3) groups.add((0 until len).map { row * GRID_COLS + col + it }.toSet())
+                col += len
+            }
+        }
+
+        // Vertical
+        for (col in 0 until GRID_COLS) {
+            var row = 0
+            while (row < GRID_ROWS) {
+                val color = gemColor(board[row * GRID_COLS + col])
+                if (color == 0) { row++; continue }
+                var len = 1
+                while (row + len < GRID_ROWS && gemColor(board[(row + len) * GRID_COLS + col]) == color) len++
+                if (len >= 3) groups.add((0 until len).map { (row + it) * GRID_COLS + col }.toSet())
+                row += len
+            }
+        }
+
+        return groups
+    }
+
+    // ── Chain Reaction Processor ──────────────────────────────────────────
+    private suspend fun processChainReaction() {
+        _gamePhase.value = GamePhase.PROCESSING
+        var chainCount = 0
+
+        while (true) {
+            val matchGroups = findAllMatches(_board.value)
+            if (matchGroups.isEmpty()) break
+
+            chainCount++
+            _combo.value = chainCount
+
+            // Collect all indices to explode + determine power gem spawns
+            val toExplode = mutableSetOf<Int>()
+            val powerGemsToSpawn = mutableMapOf<Int, Int>() // index → gemValue
+
+            for (group in matchGroups) {
+                toExplode.addAll(group)
+                val color = gemColor(_board.value[group.first()])
+                when {
+                    group.size >= 5 -> {
+                        val spawnIdx = group.elementAt(group.size / 2)
+                        powerGemsToSpawn[spawnIdx] = makeGem(color, 3) // Nova
+                    }
+                    group.size == 4 -> {
+                        val spawnIdx = group.elementAt(1)
+                        powerGemsToSpawn[spawnIdx] = makeGem(color, 1) // Lightning
+                    }
+                }
+            }
+
+            // Activate power gems that are caught in the explosion
+            val extraExplode = mutableSetOf<Int>()
+            for (idx in toExplode) {
+                val v = _board.value[idx]
+                when (gemType(v)) {
+                    1 -> { // Lightning — clear entire row
+                        val row = idx / GRID_COLS
+                        for (c in 0 until GRID_COLS) extraExplode.add(row * GRID_COLS + c)
+                    }
+                    2 -> { // Bomb — clear 3×3
+                        val row = idx / GRID_COLS; val col = idx % GRID_COLS
+                        for (dr in -1..1) for (dc in -1..1) {
+                            val nr = row + dr; val nc = col + dc
+                            if (nr in 0 until GRID_ROWS && nc in 0 until GRID_COLS)
+                                extraExplode.add(nr * GRID_COLS + nc)
+                        }
+                    }
+                    3 -> { // Nova — clear all gems of same base color
+                        val color = gemColor(v)
+                        _board.value.forEachIndexed { i, gv -> if (gemColor(gv) == color) extraExplode.add(i) }
+                    }
+                }
+            }
+
+            val allExploding = toExplode + extraExplode
+            _explodingIndices.value = allExploding
+
+            // Score: 50 pts per gem × chain multiplier
+            val gained = allExploding.size * 50 * chainCount
+            _score.value += gained
+
+            delay(320) // Explosion animation window
+
+            // Apply board changes
+            val newBoard = _board.value.toMutableList()
+            allExploding.forEach { newBoard[it] = 0 }
+            powerGemsToSpawn.forEach { (idx, gem) -> newBoard[idx] = gem }
+
+            _board.value = newBoard.toList()
+            _explodingIndices.value = emptySet()
+
+            delay(80)
+
+            // Gravity: gems fall down
+            _board.value = applyGravity(_board.value.toMutableList())
+            delay(220)
+
+            // Fill empty slots with new gems
+            _board.value = fillEmpty(_board.value.toMutableList())
+            delay(180)
+        }
+
+        _combo.value = 0
+
+        // Deadlock detection — auto-shuffle if no valid moves
+        if (!hasValidMoves(_board.value)) {
+            delay(200)
+            var shuffled = _board.value.toMutableList()
+            var attempts = 0
+            do {
+                shuffled.shuffle()
+                attempts++
+            } while (!hasValidMoves(shuffled) && attempts < 30)
+            _board.value = shuffled.toList()
+        }
+
+        // Check win / lose
+        val cfg = getLevelConfig()
+        _gamePhase.value = when {
+            _score.value >= cfg.targetScore -> {
+                val earnedStars = when {
+                    _score.value >= cfg.targetScore * 2      -> 3
+                    _score.value >= (cfg.targetScore * 1.5).toInt() -> 2
+                    else -> 1
+                }
+                _stars.value = earnedStars
+                viewModelScope.launch {
+                    repository.insertScore(
+                        LevelScore(
+                            level = _currentLevel.value,
+                            score = _score.value,
+                            stars = earnedStars,
+                            moves = cfg.maxMoves - _movesLeft.value
+                        )
+                    )
+                    loadLevelStars()
+                }
+                GamePhase.LEVEL_COMPLETE
+            }
+            _movesLeft.value <= 0 -> GamePhase.GAME_OVER
+            else                   -> GamePhase.PLAYING
+        }
+    }
+
+    // ── Board Helpers ─────────────────────────────────────────────────────
+    private fun applyGravity(board: MutableList<Int>): List<Int> {
+        for (col in 0 until GRID_COLS) {
+            val nonEmpty = (0 until GRID_ROWS)
+                .map { row -> board[row * GRID_COLS + col] }
+                .filter { it != 0 }
+            val empties = GRID_ROWS - nonEmpty.size
+            for (row in 0 until GRID_ROWS) {
+                board[row * GRID_COLS + col] = if (row < empties) 0 else nonEmpty[row - empties]
+            }
+        }
+        return board
+    }
+
+    private fun fillEmpty(board: MutableList<Int>): List<Int> {
+        for (i in board.indices) {
+            if (board[i] == 0) board[i] = (1..GEM_COLORS).random()
+        }
+        return board
+    }
+
+    private fun hasValidMoves(board: List<Int>): Boolean {
+        for (i in board.indices) {
+            val row = i / GRID_COLS; val col = i % GRID_COLS
+            // Swap right
+            if (col < GRID_COLS - 1) {
+                val test = board.toMutableList()
+                val tmp = test[i]; test[i] = test[i + 1]; test[i + 1] = tmp
+                if (findAllMatches(test).isNotEmpty()) return true
+            }
+            // Swap down
+            if (row < GRID_ROWS - 1) {
+                val test = board.toMutableList()
+                val tmp = test[i]; test[i] = test[i + GRID_COLS]; test[i + GRID_COLS] = tmp
+                if (findAllMatches(test).isNotEmpty()) return true
+            }
         }
         return false
     }
 
-    private fun checkVictory() {
-        val size = _gridSize.value
-        val solvedBoard = (1 until size * size).toList() + listOf(0)
-        if (_tiles.value == solvedBoard) {
-            _isCompleted.value = true
-            stopTimer()
-            
-            // Log score to DB!
-            viewModelScope.launch {
-                repository.insertScore(
-                    GameScore(
-                        gridSize = size,
-                        themeName = _themeName.value,
-                        moves = _moves.value,
-                        timeSecs = _timeSecs.value
-                    )
-                )
-                repository.deleteActiveGame() // Deleted saved game as it's finished!
-                checkSavedGamePresence()
-            }
-        }
-    }
-
-    // Smart Hint heuristic generator using sum of Manhattan Distances
-    fun calculateHint() {
-        if (_isCompleted.value || _isPaused.value) return
-        val size = _gridSize.value
-        val tilesList = _tiles.value
-        val emptyIndex = tilesList.indexOf(0)
-        
-        val candidates = getAdjacentIndices(emptyIndex, size)
-        if (candidates.isEmpty()) return
-        
-        var bestMoveIndex = -1
-        var minDistanceSum = Int.MAX_VALUE
-        
-        for (candidateIdx in candidates) {
-            // Simulate the board swap
-            val simulatedList = tilesList.toMutableList()
-            simulatedList[emptyIndex] = simulatedList[candidateIdx]
-            simulatedList[candidateIdx] = 0
-            
-            // Compute sum of Manhattan distances
-            var totalDistance = 0
-            for (i in 0 until simulatedList.size) {
-                val value = simulatedList[i]
-                if (value != 0) {
-                    val targetIdx = value - 1
-                    
-                    val currentR = i / size
-                    val currentC = i % size
-                    
-                    val targetR = targetIdx / size
-                    val targetC = targetIdx % size
-                    
-                    totalDistance += abs(currentR - targetR) + abs(currentC - targetC)
-                }
-            }
-            
-            if (totalDistance < minDistanceSum) {
-                minDistanceSum = totalDistance
-                bestMoveIndex = candidateIdx
-            }
-        }
-        
-        if (bestMoveIndex != -1) {
-            _hintTileValue.value = tilesList[bestMoveIndex]
-        }
-    }
-
-    // Auto load saved game
-    fun loadSavedGame() {
-        viewModelScope.launch {
-            val saved = repository.getActiveGame()
-            if (saved != null) {
-                _gridSize.value = saved.gridSize
-                _themeName.value = saved.themeName
-                _moves.value = saved.moves
-                _timeSecs.value = saved.timeSecs
-                _isCompleted.value = saved.isCompleted
-                _isPaused.value = false
-                _hintTileValue.value = null
-                
-                // Parse CSV state string back into List<Int>
-                val tileValues = saved.boardState.split(",").mapNotNull { it.toIntOrNull() }
-                if (tileValues.size == saved.gridSize * saved.gridSize) {
-                    _tiles.value = tileValues
-                    _screenState.value = ScreenState.Playing
-                    startTimer()
-                } else {
-                    // Corruption/fallback reset
-                    startNewGame()
-                }
-            } else {
-                startNewGame()
-            }
-        }
-    }
-
-    private fun saveCurrentGameState() {
-        viewModelScope.launch {
-            if (_tiles.value.isNotEmpty() && !_isCompleted.value) {
-                val stateCSV = _tiles.value.joinToString(",")
-                repository.saveActiveGame(
-                    GameState(
-                        gridSize = _gridSize.value,
-                        themeName = _themeName.value,
-                        boardState = stateCSV,
-                        moves = _moves.value,
-                        timeSecs = _timeSecs.value,
-                        isCompleted = _isCompleted.value
-                    )
-                )
-                checkSavedGamePresence()
-            }
-        }
-    }
-
-    // Game lifecycle controls
-    fun pauseGame() {
-        if (!_isPaused.value && !_isCompleted.value) {
-            _isPaused.value = true
-            stopTimer()
-            saveCurrentGameState()
-        }
-    }
-
-    fun resumeGame() {
-        if (_isPaused.value && !_isCompleted.value) {
-            _isPaused.value = false
-            startTimer()
-        }
-    }
-
-    private fun startTimer() {
-        timerJob?.cancel()
-        timerJob = viewModelScope.launch {
-            while (true) {
-                delay(1000)
-                _timeSecs.value += 1
-                // Auto-save every 10 seconds for robustness
-                if (_timeSecs.value % 10 == 0) {
-                    saveCurrentGameState()
-                }
-            }
-        }
-    }
-
-    private fun stopTimer() {
-        timerJob?.cancel()
-        timerJob = null
-    }
-
-    private fun pauseTimerStateOnly() {
-        stopTimer()
-    }
-
-    private fun resumeTimer() {
-        if (_screenState.value == ScreenState.Playing && !_isPaused.value && !_isCompleted.value) {
-            startTimer()
-        }
-    }
-
-    fun restartCurrentGame() {
-        startNewGame()
-    }
-
-    fun clearHistory() {
-        viewModelScope.launch {
-            repository.clearHistory()
-        }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        stopTimer()
-    }
+    fun clearHistory() { viewModelScope.launch { repository.clearHistory() } }
 }
